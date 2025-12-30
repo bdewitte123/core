@@ -66,6 +66,7 @@ from .const import (
     CONF_COLD_TOLERANCE,
     CONF_HEATER,
     CONF_HOT_TOLERANCE,
+    CONF_HUMSENSOR,
     CONF_MAX_TEMP,
     CONF_MIN_DUR,
     CONF_MIN_TEMP,
@@ -95,6 +96,7 @@ PLATFORM_SCHEMA_COMMON = vol.Schema(
     {
         vol.Required(CONF_HEATER): cv.entity_id,
         vol.Required(CONF_SENSOR): cv.entity_id,
+        vol.Optional(CONF_HUMSENSOR): cv.entity_id,
         vol.Optional(CONF_AC_MODE): cv.boolean,
         vol.Optional(CONF_MAX_TEMP): vol.Coerce(float),
         vol.Optional(CONF_MIN_DUR): cv.positive_time_period,
@@ -162,6 +164,7 @@ async def _async_setup_config(
     name: str = config[CONF_NAME]
     heater_entity_id: str = config[CONF_HEATER]
     sensor_entity_id: str = config[CONF_SENSOR]
+    humsensor_entity_id: str | Any = config.get(CONF_HUMSENSOR)
     min_temp: float | None = config.get(CONF_MIN_TEMP)
     max_temp: float | None = config.get(CONF_MAX_TEMP)
     target_temp: float | None = config.get(CONF_TARGET_TEMP)
@@ -185,6 +188,7 @@ async def _async_setup_config(
                 name=name,
                 heater_entity_id=heater_entity_id,
                 sensor_entity_id=sensor_entity_id,
+                humsensor_entity_id=humsensor_entity_id,
                 min_temp=min_temp,
                 max_temp=max_temp,
                 target_temp=target_temp,
@@ -216,6 +220,7 @@ class GenericThermostat(ClimateEntity, RestoreEntity):
         name: str,
         heater_entity_id: str,
         sensor_entity_id: str,
+        humsensor_entity_id: str,
         min_temp: float | None,
         max_temp: float | None,
         target_temp: float | None,
@@ -235,6 +240,7 @@ class GenericThermostat(ClimateEntity, RestoreEntity):
         self._attr_name = name
         self.heater_entity_id = heater_entity_id
         self.sensor_entity_id = sensor_entity_id
+        self.humsensor_entity_id = humsensor_entity_id
         self.device_entry = async_entity_id_to_device(
             hass,
             heater_entity_id,
@@ -254,6 +260,7 @@ class GenericThermostat(ClimateEntity, RestoreEntity):
             self._attr_hvac_modes = [HVACMode.HEAT, HVACMode.OFF]
         self._active = False
         self._cur_temp: float | None = None
+        self._cur_hum: float | None = None
         self._temp_lock = asyncio.Lock()
         self._min_temp = min_temp
         self._max_temp = max_temp
@@ -284,6 +291,12 @@ class GenericThermostat(ClimateEntity, RestoreEntity):
                 self.hass, [self.sensor_entity_id], self._async_sensor_changed
             )
         )
+        if self.humsensor_entity_id:
+            self.async_on_remove(
+                async_track_state_change_event(
+                    self.hass, [self.humsensor_entity_id], self._async_humsensor_changed
+                )
+            )
         self.async_on_remove(
             async_track_state_change_event(
                 self.hass, [self.heater_entity_id], self._async_switch_changed
@@ -315,6 +328,14 @@ class GenericThermostat(ClimateEntity, RestoreEntity):
                 self.hass.async_create_task(
                     self._check_switch_initial_state(), eager_start=True
                 )
+            if self.humsensor_entity_id:
+                humsensor_state = self.hass.states.get(self.humsensor_entity_id)
+                if humsensor_state and humsensor_state.state not in (
+                    STATE_UNAVAILABLE,
+                    STATE_UNKNOWN,
+                ):
+                    self._async_update_humidity(humsensor_state)
+                    self.async_write_ha_state()
 
         if self.hass.state is CoreState.running:
             _async_startup()
@@ -379,6 +400,11 @@ class GenericThermostat(ClimateEntity, RestoreEntity):
     def current_temperature(self) -> float | None:
         """Return the sensor temperature."""
         return self._cur_temp
+
+    @property
+    def current_humidity(self) -> float | None:
+        """Return the sensor humidity."""
+        return self._cur_hum
 
     @property
     def hvac_mode(self) -> HVACMode | None:
@@ -459,6 +485,17 @@ class GenericThermostat(ClimateEntity, RestoreEntity):
         await self._async_control_heating()
         self.async_write_ha_state()
 
+    async def _async_humsensor_changed(
+        self, event: Event[EventStateChangedData]
+    ) -> None:
+        """Handle humidity changes."""
+        new_state = event.data["new_state"]
+        if new_state is None or new_state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+            return
+
+        self._async_update_humidity(new_state)
+        self.async_write_ha_state()
+
     async def _check_switch_initial_state(self) -> None:
         """Prevent the device from keep running if HVACMode.OFF."""
         if self._hvac_mode == HVACMode.OFF and self._is_device_active:
@@ -492,6 +529,17 @@ class GenericThermostat(ClimateEntity, RestoreEntity):
             if not math.isfinite(cur_temp):
                 raise ValueError(f"Sensor has illegal state {state.state}")  # noqa: TRY301
             self._cur_temp = cur_temp
+        except ValueError as ex:
+            _LOGGER.error("Unable to update from sensor: %s", ex)
+
+    @callback
+    def _async_update_humidity(self, state: State) -> None:
+        """Update thermostat with latest state from sensor."""
+        try:
+            cur_hum = float(state.state)
+            if not math.isfinite(cur_hum):
+                raise ValueError(f"Sensor has illegal state {state.state}")  # noqa: TRY301
+            self._cur_hum = cur_hum
         except ValueError as ex:
             _LOGGER.error("Unable to update from sensor: %s", ex)
 

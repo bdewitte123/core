@@ -21,6 +21,7 @@ from .const import (
     CONF_COLD_TOLERANCE,
     CONF_HEATER,
     CONF_HOT_TOLERANCE,
+    CONF_HUMSENSOR,
     CONF_MAX_TEMP,
     CONF_MIN_DUR,
     CONF_MIN_TEMP,
@@ -54,6 +55,11 @@ OPTIONS_SCHEMA = {
     ): selector.NumberSelector(
         selector.NumberSelectorConfig(
             mode=selector.NumberSelectorMode.BOX, unit_of_measurement=DEGREE, step=0.1
+        )
+    ),
+    vol.Optional(CONF_HUMSENSOR): selector.EntitySelector(
+        selector.EntitySelectorConfig(
+            domain=SENSOR_DOMAIN, device_class=SensorDeviceClass.HUMIDITY
         )
     ),
     vol.Optional(CONF_MIN_DUR): selector.DurationSelector(

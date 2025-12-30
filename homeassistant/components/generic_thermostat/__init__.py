@@ -15,7 +15,7 @@ from homeassistant.helpers.helper_integration import (
     async_remove_helper_config_entry_from_source_device,
 )
 
-from .const import CONF_HEATER, CONF_SENSOR, PLATFORMS
+from .const import CONF_HEATER, CONF_HUMSENSOR, CONF_SENSOR, PLATFORMS
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -75,6 +75,31 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             hass, entry.options[CONF_SENSOR], async_sensor_updated
         )
     )
+
+    async def async_humsensor_updated(
+        event: Event[er.EventEntityRegistryUpdatedData],
+    ) -> None:
+        """Handle entity registry update."""
+        data = event.data
+        if data["action"] != "update":
+            return
+        if "entity_id" not in data["changes"]:
+            return
+
+        # Entity_id changed, update the config entry
+        hass.config_entries.async_update_entry(
+            entry,
+            options={**entry.options, CONF_HUMSENSOR: data["entity_id"]},
+        )
+        hass.config_entries.async_schedule_reload(entry.entry_id)
+
+    humidity_entity_id = entry.options.get(CONF_HUMSENSOR)
+    if humidity_entity_id:
+        entry.async_on_unload(
+            async_track_entity_registry_updated_event(
+                hass, entry.options[CONF_HUMSENSOR], async_humsensor_updated
+            )
+        )
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
